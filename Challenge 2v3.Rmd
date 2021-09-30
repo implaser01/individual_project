@@ -1,0 +1,152 @@
+---
+title: "Session 4: Homework 2"
+author: "Study group and members' names go here"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    highlight: zenburn
+    number_sections: yes
+    toc: yes
+    toc_float: yes
+    code_folding: show
+---
+
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = FALSE, 
+  warning = FALSE, 
+  tidy=FALSE,     # display code as typed
+  size="small")   # slightly smaller font for code
+options(digits = 3)
+
+# default figure size
+knitr::opts_chunk$set(
+  fig.width=6.75, 
+  fig.height=6.75,
+  fig.align = "center"
+)
+```
+
+
+```{r load-libraries, include=FALSE}
+library(tidyverse)  # Load ggplot2, dplyr, and all the other tidyverse packages
+library(mosaic)
+library(ggthemes)
+library(lubridate)
+library(here)
+library(skimr)
+library(janitor)
+library(httr)
+library(readxl)
+library(vroom)
+library(grid)
+library(ggpubr)
+library(rvest)
+library(ggtext)
+```
+
+
+
+
+# Challenge 2: How has the CPI and its components changed over the last few years?
+
+### Scraping the FRED website 
+
+FRED website contains the CPI data and all of its components.
+```{r, scrape_CPI_Data}
+
+url <- "https://fredaccount.stlouisfed.org/public/datalist/843" #Assigning Fred url to a value 
+
+
+# get tables that exist on the page 
+tables <- url %>% 
+  read_html() %>% 
+  html_nodes(css="table")
+
+
+# parse HTML tables into a dataframe called Components
+Components <- map(tables, . %>% 
+             html_table(fill=TRUE)%>% 
+             janitor::clean_names())
+
+
+# list of CPI Components
+CPI_Components <- Components[[2]] %>% # the second table on the page contains the list of all components
+ select(series_id)
+  
+CPI_Titles <- Components[[2]] %>% 
+  select(title)
+```
+
+
+
+
+
+### Using tidyquant to get economic data
+
+```{r, getting tidyquant data}
+quant_data <- tidyquant::tq_get(x = CPI_Components, get = "economic.data", from =  "2000-01-01")
+
+
+```
+
+### Calculation of yoy change of All Items CPI and select components
+
+```{r, calculating_lag_values}
+select_series <- c("CPIAUCSL", "CPIHOSSL", "CPITRNSL", "CPIFABSL", "CPIAPPSL") #Creating a vector with select CPI components and All Items CPI based on data from https://www.bls.gov/cpi/tables/relative-importance/2020.htm
+
+yoy_change <- quant_data %>% 
+  filter(series_id %in% select_series) %>% #filtering for All items and mjor CPI components
+  group_by(series_id) %>% 
+  mutate(year_change = price/lag(price, 12) - 1, #Calculating yoy change
+         Title = case_when(   #Creating a new column to identify series_id names
+    endsWith(series_id, "UCSL") ~ "All Items",
+    endsWith(series_id, "HOSSL") ~ "Housing",
+    endsWith(series_id, "TRNSL") ~ "Transport",
+    endsWith(series_id, "APPSL") ~ "Apparel",
+    endsWith(series_id, "FABSL") ~ "Food and Beverage",
+    
+    ),
+    positive = case_when( #creating a new column to determine if value is positive or not
+      year_change > 0 ~ "Yes",
+      year_change < 0 ~ "No"
+    )
+         
+         ) %>% 
+  filter(date >= "2015-01-01") #filtering for dates in dataset
+
+```
+
+```{r, adding levels}
+yoy_change$Title_L <- factor(yoy_change$Title, levels=c("All Items","Housing","Transport", "Food and Beverage", "Apparel"), labels=c("All Items","Housing","Transport", "Food and Beverage", "Apparel")) #Creating levels for CPI components based on US Bureau of Labor Statistics Data
+```
+
+
+```{r, graph}
+CPI_plot <- ggplot(data = yoy_change, mapping = aes(x = date, y = year_change,  color = positive, group = 1))+ #Coloring based on the sign of yoy change and grouping for 1 plot
+  geom_point()+
+  geom_smooth(se=F)+
+  facet_wrap(~Title_L, scales = "free")+ #freeing scales
+  theme_bw()+
+  theme(legend.position = "none")+ #removing legend
+  scale_y_continuous(labels = scales::percent_format(accuracy = 0.1))+ #formatting y axis for 1 decimal
+  NULL
+
+
+CPI_plot <- CPI_plot+
+  labs(
+    title = "<b> Yearly change of US CPI (All Items) and its components</b><br>
+       <span style = 'font-size:12pt'>YoY change being <span style='color:#DB5E61'>positive</span> or <span style='color:#7abaf3'>negative</span></span>",
+    y = "YoY % Change",
+    caption = "Data from St Louis Fed FRED \n https://fredaccount.stlouisfed.org/public/datalist/843"
+  )+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())+
+  NULL
+
+CPI_plot
+```
+
